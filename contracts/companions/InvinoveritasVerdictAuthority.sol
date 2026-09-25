@@ -38,10 +38,16 @@ import {ITaskTender} from "../interfaces/ITaskTender.sol";
 ///        (b) DEADLINE — a verdict arriving after `internalWindow` (configured strictly shorter
 ///            than the tender's `judgmentWindow` at deployment) is refused, never accepted late.
 ///            The fulfiller's protection is the kernel's own `claimUnjudged`, exactly as if no
-///            acceptance authority existed at all — this contract failing open into silence
-///            costs it nothing extra to guard against, by design. Under epoch pacing that
-///            protection can itself be queued to the next epoch (the kernel's own documented
-///            behavior, not something this contract changes) — worth knowing, not a defect here.
+///            acceptance authority existed at all, so this contract failing into silence never
+///            strands the FULFILLER. It is not free for the DEMANDER: under the deadline default a
+///            judge's lapse pays the submitter, junk included (ERC-8414 Security Considerations,
+///            "the only unpaid exit from a reservation is a rejection in time"). This relay's
+///            liveness is therefore load-bearing for `internalWindow` per submission, like any
+///            judge's: a publisher using it MUST size `judgmentWindow` to the relayer's real
+///            availability, and an outage here is paid for in rejections that never land. Under
+///            epoch pacing the claim itself can be queued to the next epoch (the kernel's own
+///            documented behavior, which also caps extraction at maxCompletionsPerEpoch x
+///            rewardPerCompletion per epoch) -- worth knowing, not changed by this contract.
 ///
 ///      LAYER 2, off-chain-verified today, on-chain-recomputable by anyone: the verdict's own
 ///      AUTHENTICITY — that invinoveritas actually signed this exact
