@@ -14,9 +14,9 @@ contract VerdictRelayGoldenTest is Test {
 
     // Produced by services/verdict_relay.py issue() + nostr PrivateKey.sign_message_hash over the fields below
     // (chainid 31337, this deployment's deterministic addresses, token 1, submission 1, version 1,
-    // resultHash sha256("deliverable bytes"), decisionRef 0xab..ab). Python digest == verdictDigest: 0x650b0881...a5b3.
-    bytes constant APPROVE_SIG = hex"f8345e948680875e1de3d4487fdb6d75b42338c2f3fe9a6fcdd9d2f5bebd0af276326ebb9ae7d05ada7185586ad10fab26d7be8d29b8b9c2505df453c9e2e7b3";
-    bytes constant REJECT_SIG = hex"f342dd15e140d64b07e361dfb3bb826a92d5680268260a18bf4cc674a62fc90dd27ab5d770a28d88e6385d49a582f067156fe8ffd399623b23fac78f9ce0eec8";
+    // resultHash sha256("deliverable bytes"), decisionRef 0xab..ab). Python digest == verdictDigest: 0x1354109d...719c. task_document "TASK.md v1" (sha256 = the minted tdHash).
+    bytes constant APPROVE_SIG = hex"8760d8859113ad41df318a851910b6068b33aa95c0b8a7f74ca763fb014f086e6d9bf991d92f81cad0447978348b0e20c93b837253fc78982e5c997683f3990a";
+    bytes constant REJECT_SIG = hex"2411830cb36220d17c5deacfed5a8a039b898ed6cc0469dac525db9dd7a518fbb532b3291485cd1158a7f0025c55214d8917aa86c851e56c3451d2c4db06c11d";
 
     function _setup() internal returns (TaskToken t, SVA a, uint256 id, uint256 sid) {
         vm.warp(1_700_000_000);
@@ -35,8 +35,8 @@ contract VerdictRelayGoldenTest is Test {
     function test_golden_digest_matches_issuer() public {
         (TaskToken t, SVA a, uint256 id, uint256 sid) = _setup();
         ITaskTender.Submission memory s = t.submissionOf(id, sid);
-        assertEq(a.verdictDigest(t, id, sid, s.taskVersion, s.resultHash, true, DREF),
-            0x650b0881d50f13f46acbdcbb4699b5af33dd82ab7128369168a5b03f98dfa5b3);
+        assertEq(a.verdictDigest(t, id, sid, s.taskVersion, s.resultHash, t.taskOf(id).tdHash, true, DREF),
+            0x1354109d221f52f5b8a3599a1eba229f534c1d09d603f65959094fa06406719c);
     }
 
     function test_golden_issuer_signature_settles_approval() public {
@@ -58,13 +58,14 @@ contract VerdictRelayGoldenTest is Test {
         assertEq(uint8(t.submissionOf(id, sid).status), uint8(ITaskTender.SubmissionStatus.Rejected));
     }
 
-    // LIVE: invinoveritas's production verdict key, signature returned by POST /review (verdict_relay_v1) on 2026-09-30
-    // for a real review (proof event 6475d9a0...b2a4, decision_ref sha256:d26158c4...5762). Chain id 8453, this
-    // deployment's addresses, token 1, submission 1, version 1, resultHash = sha256 of the reviewed deliverable.
+    // LIVE (v2): invinoveritas's production verdict key, signature returned by POST /review (verdict_relay) on
+    // 2026-09-30 for a real review against a real task document (proof event 06051d02...39c2). Chain id 8453, this
+    // deployment's addresses, token 1, submission 1, version 1; tdHash = sha256 of that task document.
     bytes32 constant PROD_KEY = 0x6786e18a864893a900bd9858e650f67ccc3513f248fed374b591e2ff6922fbb7;
-    bytes32 constant LIVE_DREF = 0xd26158c4319d726137a853872c527cf041e40131c20659acaf2dcc0291965762;
+    bytes32 constant LIVE_DREF = 0x60c90e70c365c62c5b503f5998f9ea7b1565ca127ec3a0e3c0e623501ab7f976;
     bytes32 constant LIVE_RESULT = 0xd220c82027bdcc8d25c8d5c3eae373941aab870fa8af44df8210f74577fefb95;
-    bytes constant LIVE_SIG = hex"3bcd431a334a6ffbd6e0d55ba819cdfdd376f99881b44e96d27493f6460b0e841cae6dd014da69551305f5b095e73336448143b9a6817d6640d9b0c9222211fc";
+    bytes32 constant LIVE_TD = 0x55b9e78f1ba60bb3f0022e8a49859a5c81db52c2a87be9314ffc53c6f64a670f;
+    bytes constant LIVE_SIG = hex"ee6866255af0da6c14a6efe3abd6cd88f5fddee4faa573b159a0abfd70ded5d48f2dc40956d703813441230c9fc2a186f92d8b104a0d21bc2e9f74175dbd9a88";
 
     function test_live_production_signature_settles() public {
         vm.chainId(8453);
@@ -73,15 +74,15 @@ contract VerdictRelayGoldenTest is Test {
         SVA a = new SVA(3 days, PROD_KEY);
         assertEq(address(t), 0x5615dEB798BB3E4dFa0139dFa1b3D433Cc23b72f);
         assertEq(address(a), 0x2e234DAe75C793f67A35089C9d99245E1C58470b);
-        uint256 id = t.mintTask(address(0xA11CE), address(0xB0B), address(a), sha256("TASK.md v1"), sha256("taskroot v1"), "u",
+        bytes32 root = sha256("taskroot v1");
+        uint256 id = t.mintTask(address(0xA11CE), address(0xB0B), address(a), LIVE_TD, root, "u",
             ITaskTender.TenderTerms(address(0), 1 ether, 0, 0, 0, 0, 0, 7 days));
         vm.deal(address(0xF00D), 10 ether);
         vm.prank(address(0xF00D));
         t.fundTask{value: 10 ether}(id, 10 ether);
         vm.prank(address(0xCAFE));
         uint256 sid = t.submitFulfillment(id, LIVE_RESULT, "");
-        assertEq(a.verdictDigest(t, id, sid, 1, LIVE_RESULT, true, LIVE_DREF),
-            0x325068a9cadb5d7894d4664519d45b57041f706de17028274a312f1fa1bd5960);
+        assertEq(a.verdictDigest(t, id, sid, 1, LIVE_RESULT, LIVE_TD, true, LIVE_DREF), 0xe11843ac7be74a8e5f1e44e05bf3aa03e9f419764ccd5702c38cfced048bc47c);
         uint256 before = address(0xCAFE).balance;
         vm.prank(address(0xBAD));
         a.relayVerdict(t, id, sid, true, LIVE_DREF, LIVE_SIG);

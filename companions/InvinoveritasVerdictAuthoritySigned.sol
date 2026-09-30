@@ -6,6 +6,7 @@ pragma solidity ^0.8.24;
 // and nothing in ERC-8414 depends on it.
 
 import {ITaskTender} from "../contracts/interfaces/ITaskTender.sol";
+import {ITaskToken} from "../contracts/interfaces/ITaskToken.sol";
 import {Bip340} from "./Bip340.sol";
 
 /// @title  Invinoveritas verdict acceptance authority, signature-checked (experimental ERC-8414 companion)
@@ -17,8 +18,10 @@ import {Bip340} from "./Bip340.sol";
 ///      Checked on-chain, per call:
 ///        (a) Authenticity and correspondence. `sig` must be a valid BIP-340 signature by `verdictKey` over
 ///            verdictDigest(...), and that digest is built from the kernel's OWN values for this submission
-///            (`taskVersion`, `resultHash` read from `submissionOf`), plus `approved` and `decisionRef`.
-///            So the signed verdict names this deliverable and this outcome; a caller cannot choose either.
+///            (`taskVersion`, `resultHash` read from `submissionOf`) and the task document it was judged against
+///            (`tdHash` read from `taskOf`), plus `approved` and `decisionRef`. So the signed verdict names this
+///            deliverable, these requirements and this outcome; a caller can choose none of them. If the task was
+///            updated after the submission (`taskOf(...).version != taskVersion`), no verdict can rule on it.
 ///        (b) Domain binding. The digest also commits to `block.chainid`, this contract's address and the
 ///            task contract's address, so a verdict signed for one deployment, chain or token cannot be
 ///            replayed at another.
@@ -34,15 +37,16 @@ import {Bip340} from "./Bip340.sol";
 ///          the verdict is right is what invinoveritas's public ledger exists to make checkable, not this contract.
 ///
 ///      Message. verdictDigest = sha256(abi.encode(DOMAIN_TAG, chainid, authority, taskContract, tokenId,
-///      submissionId, taskVersion, resultHash, approved, decisionRef)), with DOMAIN_TAG =
-///      sha256("invinoveritas/verdict-relay/v1"). Every field is a 32-byte ABI word, so an off-chain signer
-///      builds the same 320 bytes without an ABI library.
+///      submissionId, taskVersion, resultHash, tdHash, approved, decisionRef)), with DOMAIN_TAG =
+///      sha256("invinoveritas/verdict-relay/v2"). Every field is a 32-byte ABI word, so an off-chain signer
+///      builds the same 352 bytes without an ABI library.
 contract InvinoveritasVerdictAuthoritySigned {
     error BadSignature();
     error BadKey();
     error WindowNotInside();
     error WindowExpired();
     error AlreadyRuled();
+    error TaskChanged();
 
     event VerdictRelayed(
         address indexed taskContract,
@@ -54,7 +58,7 @@ contract InvinoveritasVerdictAuthoritySigned {
         address submitter
     );
 
-    bytes32 public constant DOMAIN_TAG = sha256("invinoveritas/verdict-relay/v1");
+    bytes32 public constant DOMAIN_TAG = sha256("invinoveritas/verdict-relay/v2");
 
     /// @notice invinoveritas's BIP-340 x-only verdict key.
     bytes32 public immutable verdictKey;
@@ -74,12 +78,13 @@ contract InvinoveritasVerdictAuthoritySigned {
         uint256 submissionId,
         uint64 taskVersion,
         bytes32 resultHash,
+        bytes32 tdHash,
         bool approved,
         bytes32 decisionRef
     ) public view returns (bytes32) {
         return sha256(abi.encode(
             DOMAIN_TAG, block.chainid, address(this), address(taskContract),
-            tokenId, submissionId, taskVersion, resultHash, approved, decisionRef
+            tokenId, submissionId, taskVersion, resultHash, tdHash, approved, decisionRef
         ));
     }
 
@@ -101,8 +106,10 @@ contract InvinoveritasVerdictAuthoritySigned {
         if (internalWindow >= jw) revert WindowNotInside();
         if (block.timestamp > uint256(sub.submittedAt) + uint256(internalWindow)) revert WindowExpired();
 
+        ITaskToken.TaskBinding memory task = ITaskToken(address(taskContract)).taskOf(tokenId);
+        if (task.version != sub.taskVersion) revert TaskChanged();
         bytes32 digest = verdictDigest(
-            taskContract, tokenId, submissionId, sub.taskVersion, sub.resultHash, approved, decisionRef
+            taskContract, tokenId, submissionId, sub.taskVersion, sub.resultHash, task.tdHash, approved, decisionRef
         );
         if (sig.length != 64 || !Bip340.verify(verdictKey, digest, bytes32(sig[0:32]), bytes32(sig[32:64]))) {
             revert BadSignature();

@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test, Vm} from "forge-std/Test.sol";
 import {TaskToken} from "../contracts/TaskToken.sol";
 import {ITaskTender} from "../contracts/interfaces/ITaskTender.sol";
+import {ITaskToken} from "../contracts/interfaces/ITaskToken.sol";
 import {Bip340} from "../companions/Bip340.sol";
 import {InvinoveritasVerdictAuthoritySigned as SVA} from "../companions/InvinoveritasVerdictAuthoritySigned.sol";
 
@@ -128,7 +129,7 @@ contract InvinoveritasVerdictAuthoritySignedTest is Test {
 
     function _verdictSig(SVA a, uint256 sk, uint256 id, uint256 sid, bool approved) internal returns (bytes memory) {
         ITaskTender.Submission memory s = t.submissionOf(id, sid);
-        bytes32 m = a.verdictDigest(t, id, sid, s.taskVersion, s.resultHash, approved, DREF);
+        bytes32 m = a.verdictDigest(t, id, sid, s.taskVersion, s.resultHash, t.taskOf(id).tdHash, approved, DREF);
         (, bytes32 rx, bytes32 sv) = _sign(sk, m, true);
         return abi.encodePacked(rx, sv);
     }
@@ -238,5 +239,30 @@ contract InvinoveritasVerdictAuthoritySignedTest is Test {
         new SVA(IW, bytes32(uint256(5)));
         vm.expectRevert(SVA.BadKey.selector);
         new SVA(IW, bytes32(N));
+    }
+
+    function test_task_updated_after_submission_refused() public {
+        SVA a = _deploy();
+        uint256 id = _tender(address(a), JW);
+        uint256 sid = _submit(id);
+        bytes memory sig = _verdictSig(a, SK, id, sid, true);
+        // the publisher changes the task after the work was delivered: no verdict may rule on the old submission
+        (bytes32 td2, bytes32 root2) = (sha256("TASK.md v2"), sha256("taskroot v2")); // before the prank (precompiles)
+        vm.prank(publisher);
+        t.updateTask(id, td2, root2);
+        vm.expectRevert(SVA.TaskChanged.selector);
+        a.relayVerdict(t, id, sid, true, DREF, sig);
+    }
+
+    function test_signature_bound_to_task_document() public {
+        SVA a = _deploy();
+        uint256 id = _tender(address(a), JW);
+        uint256 sid = _submit(id);
+        ITaskTender.Submission memory s = t.submissionOf(id, sid);
+        // a verdict formed against a different task document cannot rule here
+        bytes32 m = a.verdictDigest(t, id, sid, s.taskVersion, s.resultHash, sha256("a more lenient task"), true, DREF);
+        (, bytes32 rx, bytes32 sv) = _sign(SK, m, true);
+        vm.expectRevert(SVA.BadSignature.selector);
+        a.relayVerdict(t, id, sid, true, DREF, abi.encodePacked(rx, sv));
     }
 }
