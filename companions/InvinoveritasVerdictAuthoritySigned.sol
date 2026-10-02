@@ -22,6 +22,12 @@ import {Bip340} from "./Bip340.sol";
 ///            (`tdHash` read from `taskOf`), plus `approved` and `decisionRef`. So the signed verdict names this
 ///            deliverable, these requirements and this outcome; a caller can choose none of them. If the task was
 ///            updated after the submission (`taskOf(...).version != taskVersion`), no verdict can rule on it.
+///            The cost of that falls on the publisher who updates: an update while a judged-path submission is pending
+///            forfeits any ruling on this authority for that submission, so it resolves through the kernel's
+///            `claimUnjudged` (once the original `judgmentWindow` has closed, and subject to the kernel's own
+///            conditions, including epoch pacing) and resolves paid. That is the kernel's deadline default working as
+///            designed (the fulfiller delivered against the document it was shown). Deployments using this authority
+///            should freeze the task before funding, as the ERC recommends, which removes this path entirely.
 ///        (b) Domain binding. The digest also commits to `block.chainid`, this contract's address and the
 ///            task contract's address, so a verdict signed for one deployment, chain or token cannot be
 ///            replayed at another.
